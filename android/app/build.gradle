@@ -1,0 +1,8 @@
+// Cari baris ini di dalam file build.gradle Anda dan pastikan isinya seperti ini:
+defaultConfig {
+    applicationId "com.minicam.app" // Ini nama package sesuai request lu
+    minSdkVersion 21
+    targetSdkVersion 33
+    versionCode 1
+    versionName "1.7 BETA"
+}
