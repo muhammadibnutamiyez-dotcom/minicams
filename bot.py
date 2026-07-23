@@ -1,26 +1,15 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import yt_dlp
-import asyncio
-import json
 import os
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Konfigurasi FFmpeg & yt-dlp yang sudah di-optimize agar tidak error
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 
-    'options': '-vn -b:a 192k'
-}
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
-    'extractaudio': True,
-    'audioformat': 'mp3',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-    'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
@@ -30,104 +19,85 @@ YTDL_OPTIONS = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
 }
+
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
+
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
-CONFIG_FILE = "voice_config.json"
+# Sistem Antrean & Status
 music_queue = []
 is_playing = False
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_config(data):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(data, f)
 
 def play_next(ctx):
     global is_playing
     if len(music_queue) > 0:
         is_playing = True
-        url = music_queue.pop(0)
+        next_url, next_title = music_queue.pop(0)
         
         vc = ctx.guild.voice_client
         if vc and vc.is_connected():
-            vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS), after=lambda e: play_next(ctx))
+            try:
+                source = discord.FFmpegPCMAudio(next_url, **FFMPEG_OPTIONS)
+                vc.play(source, after=lambda e: play_next(ctx))
+                # Kirim pesan sedang memutar lagu berikutnya
+                asyncio.run_coroutine_threadsafe(ctx.send(f"▶️ Memutar lagu berikutnya: **{next_title}**"), bot.loop)
+            except Exception as e:
+                print(f"Error play_next: {e}")
+                play_next(ctx)
     else:
         is_playing = False
 
 @bot.event
 async def on_ready():
     print(f'Bot {bot.user} berhasil online!')
-    try:
-        synced = await bot.tree.sync()
-        print(f"Berhasil sync {len(synced)} slash commands.")
-    except Exception as e:
-        print(f"Gagal sync: {e}")
-        
-    config = load_config()
-    if "voice_channel" in config:
-        channel = bot.get_channel(config["voice_channel"])
-        if channel:
-            try:
-                await channel.connect()
-            except Exception:
-                pass
-
-@bot.tree.command(name="setchannel", description="Set default voice channel untuk bot (Owner Only)")
-@app_commands.default_permissions(administrator=True)
-async def setchannel(interaction: discord.Interaction, channel: discord.VoiceChannel):
-    config = load_config()
-    config["voice_channel"] = channel.id
-    save_config(config)
-    
-    vc = interaction.guild.voice_client
-    if vc:
-        await vc.move_to(channel)
-    else:
-        await channel.connect()
-        
-    await interaction.response.send_message(f"✅ Bot akan *stay* di channel {channel.mention}!", ephemeral=True)
-
-@bot.tree.command(name="help", description="Menampilkan bantuan bot musik")
-async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎵 ZEMI - MUSIC BOT HELP COMMAND", color=discord.Color.purple())
-    embed.add_field(name="!play <link>", value="Memutar musik dari YouTube secara berurutan (Queue).", inline=False)
-    embed.add_field(name="!stop", value="Menghentikan musik (menggunakan sistem voting jika ramai di VC).", inline=False)
-    embed.add_field(name="!ss <judul>", value="Mencari musik dari teks dan menampilkan 4 hasil dari YouTube.", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.command(name="play")
-async def play(ctx, url: str):
+async def play(ctx, *, query: str):
+    global is_playing
+    if not ctx.author.voice:
+        return await ctx.send("❌ Kamu harus masuk ke Voice Channel terlebih dahulu!")
+    
+    channel = ctx.author.voice.channel
     vc = ctx.guild.voice_client
+
     if not vc:
-        return await ctx.send("❌ Bot belum di-setup ke voice channel. Gunakan `/setchannel` terlebih dahulu.")
+        vc = await channel.connect()
+    elif vc.channel != channel:
+        await vc.move_to(channel)
 
     msg = await ctx.send("🔍 Mengambil data lagu...")
-    
+
     try:
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        data = ytdl.extract_info(query if "http" in query else f"ytsearch:{query}", download=False)
         
         if 'entries' in data:
             data = data['entries'][0]
             
         audio_url = data['url']
         title = data.get('title', 'Audio')
-        
-        music_queue.append(audio_url)
-        
+
         if not is_playing:
-            play_next(ctx)
-            await msg.edit(content=f"▶️ Sedang memutar: **{title}**")
+            is_playing = True
+            music_queue.append((audio_url, title))
+            
+            # Ambil item pertama dan langsung putar
+            current_url, current_title = music_queue.pop(0)
+            source = discord.FFmpegPCMAudio(current_url, **FFMPEG_OPTIONS)
+            vc.play(source, after=lambda e: play_next(ctx))
+            
+            await msg.edit(content=f"▶️ Sedang memutar: **{current_title}**")
         else:
-            await msg.edit(content=f"📝 Ditambahkan ke antrean: **{title}** (Posisi: {len(music_queue)})")
+            music_queue.append((audio_url, title))
+            await msg.edit(content=f"📝 Ditambahkan ke antrean: **{title}** (Posisi antrean: {len(music_queue)})")
             
     except Exception as e:
+        print(f"ERROR PLAY: {e}")
         await msg.edit(content=f"❌ Gagal memutar lagu. Pastikan link valid atau coba gunakan `!ss`.")
 
+# Fitur Vote Stop
 class VoteStop(discord.ui.View):
     def __init__(self, required_votes, vc):
         super().__init__(timeout=60)
@@ -150,7 +120,7 @@ class VoteStop(discord.ui.View):
             
             for child in self.children:
                 child.disabled = True
-            await interaction.response.edit_message(content="🛑 **Voting berhasil!** Musik dihentikan.", view=self)
+            await interaction.response.edit_message(content="🛑 **Voting berhasil!** Musik dihentikan dan antrean dikosongkan.", view=self)
             self.stop()
         else:
             await interaction.response.send_message(f"Vote diterima! ({len(self.voters)}/{self.required_votes})")
@@ -176,26 +146,20 @@ async def stop(ctx):
 
 @bot.command(name="ss")
 async def ss(ctx, *, query: str):
-    msg = await ctx.send(f"🔍 Mencari `{query}` di YouTube...")
+    msg = await ctx.send(f"🔍 Mencari `{query}`...")
     try:
-        search_options = {'format': 'bestaudio/best', 'noplaylist': 'True', 'quiet': True, 'extract_flat': True}
-        search_ytdl = yt_dlp.YoutubeDL(search_options)
-        
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: search_ytdl.extract_info(f"ytsearch4:{query}", download=False))
-        
+        data = ytdl.extract_info(f"ytsearch4:{query}", download=False)
         if 'entries' not in data or len(data['entries']) == 0:
-            return await msg.edit(content="❌ Tidak menemukan hasil apa pun.")
+            return await msg.edit(content="❌ Tidak ditemukan.")
             
-        embed = discord.Embed(title="🔍 Hasil Pencarian Musik", color=discord.Color.blue())
+        embed = discord.Embed(title="🔍 Hasil Pencarian", color=discord.Color.blue())
         for i, entry in enumerate(data['entries']):
-            url = entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}"
+            url = f"https://www.youtube.com/watch?v={entry.get('id')}"
             embed.add_field(name=f"{i+1}. {entry['title']}", value=url, inline=False)
             
         embed.set_footer(text="Gunakan link di atas dengan command !play")
         await msg.edit(content=None, embed=embed)
-        
     except Exception as e:
-        await msg.edit(content="❌ Terjadi kesalahan saat mencari lagu.")
+        await msg.edit(content=f"❌ Error pencarian: {e}")
 
 bot.run(os.getenv("BOT_TOKEN"))
