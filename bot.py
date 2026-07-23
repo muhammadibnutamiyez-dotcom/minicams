@@ -18,6 +18,7 @@ YTDL_OPTIONS = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'cookiefile': 'cookies.txt',
 }
 
 FFMPEG_OPTIONS = {
