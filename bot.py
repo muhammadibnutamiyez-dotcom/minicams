@@ -198,4 +198,4 @@ async def ss(ctx, *, query: str):
     except Exception as e:
         await msg.edit(content="❌ Terjadi kesalahan saat mencari lagu.")
 
-bot.run(os.getenv("MTUyOTU4NjI4MTE2NjgwMzA0NQ.G3cdei.mDF_SQPF8ZSlotyQkxbOICWOG2zN-uNrJDJ4rA"))
+bot.run(os.getenv("BOT_TOKEN"))
